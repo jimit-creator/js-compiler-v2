@@ -15,11 +15,17 @@ import {
   ResizablePanel, 
   ResizablePanelGroup 
 } from "@/components/ui/resizable";
+import { Menu } from "lucide-react";
 
 export default function Home() {
   const { shareId } = useParams();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [showExamples, setShowExamples] = useState<boolean>(() => {
+    // Try to load from localStorage
+    const savedPreference = localStorage.getItem('js-compiler-showExamples');
+    return savedPreference !== null ? savedPreference === 'true' : true;
+  });
   const [, navigate] = useLocation();
   const { toast } = useToast();
   
@@ -42,6 +48,11 @@ export default function Home() {
     enabled: !!shareId,
   });
 
+  // Save examples visibility preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('js-compiler-showExamples', String(showExamples));
+  }, [showExamples]);
+
   useEffect(() => {
     if (snippetData && 'code' in snippetData && 'title' in snippetData) {
       setCode(snippetData.code);
@@ -59,12 +70,18 @@ export default function Home() {
   const toggleShareModal = () => {
     setShareModalOpen(!shareModalOpen);
   };
+  
+  const toggleExamples = (show: boolean) => {
+    setShowExamples(show);
+  };
 
   return (
     <div className="h-screen flex flex-col dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200 overflow-hidden">
       <Header 
         onShareClick={toggleShareModal} 
         onMenuClick={toggleMobileMenu}
+        showExamples={showExamples}
+        onToggleExamples={toggleExamples}
       />
       
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
@@ -75,6 +92,8 @@ export default function Home() {
             toggleLineNumbers={toggleLineNumbers}
             autoRun={autoRun}
             toggleAutoRun={toggleAutoRun}
+            showExamples={showExamples}
+            onToggleExamples={toggleExamples}
           />
         </div>
         
@@ -84,11 +103,7 @@ export default function Home() {
             onClick={toggleMobileMenu}
             className="flex items-center space-x-2 focus:outline-none"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-menu">
-              <line x1="4" x2="20" y1="12" y2="12" />
-              <line x1="4" x2="20" y1="6" y2="6" />
-              <line x1="4" x2="20" y1="18" y2="18" />
-            </svg>
+            <Menu className="h-5 w-5" />
             <span>Menu</span>
           </button>
         </div>
@@ -101,6 +116,8 @@ export default function Home() {
           toggleLineNumbers={toggleLineNumbers}
           autoRun={autoRun}
           toggleAutoRun={toggleAutoRun}
+          showExamples={showExamples}
+          onToggleExamples={toggleExamples}
         />
         
         {/* Main Content Area - Resizable panels for editor and console */}

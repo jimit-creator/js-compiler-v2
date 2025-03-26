@@ -1,8 +1,8 @@
 import { Button } from "@/components/ui/button";
 import ThemeToggle from "./ThemeToggle";
-import { Share1Icon, InfoCircledIcon } from "@radix-ui/react-icons";
-import { Code2, GithubIcon, Twitter } from "lucide-react";
-import { memo } from "react";
+import { Share1Icon, InfoCircledIcon, GearIcon, EyeClosedIcon, EyeOpenIcon } from "@radix-ui/react-icons";
+import { Code2, GithubIcon, Twitter, Settings } from "lucide-react";
+import { memo, useState } from "react";
 import { 
   Tooltip,
   TooltipContent,
@@ -16,18 +16,45 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuCheckboxItem,
+  DropdownMenuGroup,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
 interface HeaderProps {
   onShareClick: () => void;
   onMenuClick?: () => void;
+  showExamples?: boolean;
+  onToggleExamples?: (show: boolean) => void;
 }
 
 // Memoize the Header to prevent unnecessary re-renders
-const Header = memo(({ onShareClick, onMenuClick }: HeaderProps) => {
+const Header = memo(({ 
+  onShareClick, 
+  onMenuClick, 
+  showExamples = true, 
+  onToggleExamples 
+}: HeaderProps) => {
   // Get app version from package.json (default to 1.0.0 if unavailable)
-  const appVersion = "1.0.0";
+  const appVersion = "1.1.0";
+  
+  // Local state for examples visibility if no callback provided
+  const [localShowExamples, setLocalShowExamples] = useState(showExamples);
+  
+  // Handle toggle examples visibility
+  const handleToggleExamples = () => {
+    const newValue = !localShowExamples;
+    setLocalShowExamples(newValue);
+    if (onToggleExamples) {
+      onToggleExamples(newValue);
+    }
+  };
 
   return (
     <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm">
@@ -91,6 +118,75 @@ const Header = memo(({ onShareClick, onMenuClick }: HeaderProps) => {
               </TooltipTrigger>
               <TooltipContent>
                 <p>About</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
+          {/* Settings dropdown */}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon">
+                      <Settings className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-60">
+                    <DropdownMenuLabel>Settings</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    
+                    <DropdownMenuGroup>
+                      {/* Example visibility toggle */}
+                      <DropdownMenuItem className="flex items-center justify-between" onSelect={(e) => {
+                        e.preventDefault();
+                        handleToggleExamples();
+                      }}>
+                        <div className="flex items-center space-x-2">
+                          {localShowExamples ? 
+                            <EyeOpenIcon className="h-4 w-4" /> : 
+                            <EyeClosedIcon className="h-4 w-4" />
+                          }
+                          <span>Show examples</span>
+                        </div>
+                        <Switch 
+                          checked={localShowExamples} 
+                          onCheckedChange={handleToggleExamples}
+                        />
+                      </DropdownMenuItem>
+                      
+                      {/* Appearance sub-menu */}
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          <span className="flex items-center space-x-2">
+                            <GearIcon className="h-4 w-4 mr-2" />
+                            <span>Appearance</span>
+                          </span>
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuPortal>
+                          <DropdownMenuSubContent>
+                            <div className="p-2">
+                              <Label htmlFor="theme-toggle" className="text-xs">Theme</Label>
+                              <div className="flex items-center justify-between mt-1.5">
+                                <ThemeToggle />
+                              </div>
+                            </div>
+                          </DropdownMenuSubContent>
+                        </DropdownMenuPortal>
+                      </DropdownMenuSub>
+                    </DropdownMenuGroup>
+                    
+                    <DropdownMenuSeparator />
+                    
+                    {/* Reset all settings */}
+                    <DropdownMenuItem>
+                      <span className="text-red-500 text-sm">Reset all settings</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Settings</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
