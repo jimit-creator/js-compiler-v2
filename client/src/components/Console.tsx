@@ -1,86 +1,609 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState, useCallback, memo, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Trash2Icon } from "lucide-react";
+import { 
+  Trash2Icon, 
+  ChevronsDownIcon, 
+  ClipboardCopyIcon, 
+  CheckIcon, 
+  PauseIcon, 
+  PlayIcon,
+  TimerIcon,
+  XCircleIcon,
+  AlertTriangleIcon,
+  ChevronRightIcon,
+  ChevronDownIcon,
+  InfoIcon
+} from "lucide-react";
 import { ConsoleOutput } from "@/contexts/CodeContext";
+import { useToast } from "@/hooks/use-toast";
+import { useCode } from "@/contexts/CodeContext";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { 
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface ConsoleProps {
   output: ConsoleOutput[];
   onClear: () => void;
 }
 
+// Memoize individual console output entries to prevent unnecessary re-renders
+const ConsoleEntry = memo(({ item, groupId, index }: { 
+  item: ConsoleOutput; 
+  groupId?: string;
+  index: number;
+}) => {
+  // Determine styling based on content and type
+  const isExecutionStart = item.type === 'system' && 
+    typeof item.content[0] === 'string' && 
+    item.content[0].includes('Executing code');
+    
+  const isExecutionComplete = item.type === 'system' && 
+    typeof item.content[0] === 'string' && 
+    item.content[0].includes('Execution completed');
+    
+  const isExecutionFailed = item.type === 'system' && 
+    typeof item.content[0] === 'string' && 
+    item.content[0].includes('Execution failed');
+    
+  const isLargeOutput = item.type === 'warn' && 
+    typeof item.content[0] === 'string' && 
+    item.content[0].includes('Large output detected');
+  
+  // Choose appropriate styling
+  const entryClasses = cn(
+    "flex items-start p-1.5 rounded-md",
+    {
+      "bg-emerald-50 dark:bg-emerald-900/10 border-l-2 border-emerald-500": isExecutionComplete,
+      "bg-red-50 dark:bg-red-900/10 border-l-2 border-red-500": isExecutionFailed,
+      "bg-blue-50 dark:bg-blue-900/10 border-l-2 border-blue-500": isExecutionStart,
+      "bg-yellow-50 dark:bg-yellow-900/10 border-l-2 border-yellow-500": isLargeOutput,
+      "hover:bg-gray-50 dark:hover:bg-gray-700": !isExecutionComplete && !isExecutionFailed && !isExecutionStart && !isLargeOutput,
+    }
+  );
+  
+  return (
+    <div 
+      className={entryClasses}
+      data-group-id={groupId}
+      data-entry-id={item.id}
+    >
+      <span className={`mr-2 ${getTypeColor(item.type)}`}>
+        {getTypePrefix(item.type)}
+      </span>
+      <div className="flex-1">
+        {item.lineNumber && (
+          <span className="font-semibold mr-1 text-xs bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">
+            Line {item.lineNumber}
+          </span>
+        )}
+        {formatContent(item.content)}
+      </div>
+    </div>
+  );
+});
+
+ConsoleEntry.displayName = 'ConsoleEntry';
+
+// Collapsible group of related console outputs
+const OutputGroup = memo(({ 
+  executionGroup: { id, outputs, timestamp, startTime, endTime, success }, 
+  isExpanded,
+  toggleExpand,
+  index
+}: { 
+  executionGroup: {
+    id: string;
+    outputs: ConsoleOutput[];
+    timestamp: number;
+    startTime?: number;
+    endTime?: number;
+    success?: boolean;
+  };
+  isExpanded: boolean;
+  toggleExpand: (id: string) => void;
+  index: number;
+}) => {
+  // Calculate duration if both times are available
+  const duration = startTime && endTime ? endTime - startTime : null;
+  
+  // Find the first system message (execution start)
+  const startMessage = outputs.find(
+    out => out.type === 'system' && 
+    typeof out.content[0] === 'string' && 
+    out.content[0].includes('Executing code')
+  );
+  
+  // Find timing message (execution complete)
+  const timingMessage = outputs.find(
+    out => out.type === 'system' && 
+    typeof out.content[0] === 'string' && 
+    (out.content[0].includes('Execution completed') || out.content[0].includes('Execution failed'))
+  );
+  
+  // Count errors and warnings
+  const errorCount = outputs.filter(out => out.type === 'error').length;
+  const warningCount = outputs.filter(out => out.type === 'warn').length;
+  
+  // Get run number from the start message if available
+  const runMatch = startMessage?.content[0]?.toString().match(/Run #(\d+)/);
+  const runNumber = runMatch ? runMatch[1] : index + 1;
+  
+  return (
+    <div className="border border-gray-100 dark:border-gray-700 rounded-md overflow-hidden">
+      {/* Group header (always visible) */}
+      <button 
+        className={cn(
+          "w-full text-left bg-gray-50 dark:bg-gray-900 p-2 px-3 text-xs font-medium",
+          "border-b border-gray-100 dark:border-gray-700 flex items-center justify-between",
+          "hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors",
+          {
+            "border-b-0": !isExpanded,
+            "bg-gray-100 dark:bg-gray-800": isExpanded
+          }
+        )}
+        onClick={() => toggleExpand(id)}
+      >
+        <div className="flex items-center space-x-2">
+          {isExpanded ? 
+            <ChevronDownIcon className="h-3.5 w-3.5 text-gray-500" /> : 
+            <ChevronRightIcon className="h-3.5 w-3.5 text-gray-500" />
+          }
+          
+          <span className="font-semibold">
+            Execution #{runNumber}
+          </span>
+          
+          {/* Optional timing badge */}
+          {duration !== null && (
+            <Badge variant="outline" className="ml-1 text-xs px-1 py-0 h-4 font-normal">
+              <TimerIcon className="h-3 w-3 mr-1" />
+              {(duration / 1000).toFixed(2)}s
+            </Badge>
+          )}
+          
+          {/* Error & warning indicators */}
+          {errorCount > 0 && (
+            <Badge variant="destructive" className="ml-1 text-xs px-1 py-0 h-4 font-normal">
+              <XCircleIcon className="h-3 w-3 mr-1" />
+              {errorCount}
+            </Badge>
+          )}
+          
+          {warningCount > 0 && (
+            <Badge variant="outline" className="ml-1 text-xs px-1 py-0 h-4 text-yellow-600 bg-yellow-100 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800 font-normal">
+              <AlertTriangleIcon className="h-3 w-3 mr-1" />
+              {warningCount}
+            </Badge>
+          )}
+          
+          {/* Success indicator */}
+          {success === true && errorCount === 0 && (
+            <Badge variant="outline" className="ml-1 text-xs px-1 py-0 h-4 text-emerald-600 bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 font-normal">
+              Success
+            </Badge>
+          )}
+          
+          {success === false && (
+            <Badge variant="outline" className="ml-1 text-xs px-1 py-0 h-4 text-red-600 bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 font-normal">
+              Failed
+            </Badge>
+          )}
+        </div>
+        
+        <div className="text-gray-500 text-xs">
+          {new Date(timestamp).toLocaleTimeString()}
+        </div>
+      </button>
+      
+      {/* Content (only visible when expanded) */}
+      {isExpanded && (
+        <div className="space-y-0.5 p-1.5">
+          {outputs.map((item, idx) => (
+            <ConsoleEntry 
+              key={item.id || `${id}-${idx}`} 
+              item={item} 
+              groupId={id}
+              index={idx} 
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+OutputGroup.displayName = 'OutputGroup';
+
 export default function Console({ output, onClear }: ConsoleProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll to bottom when new output is added
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("console");
+  const [isCopied, setIsCopied] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const { toast } = useToast();
+  
+  // Get auto-scroll from context instead of local state
+  const { 
+    isExecuting, 
+    executionTime, 
+    autoScroll, 
+    toggleAutoScroll 
+  } = useCode();
+  
+  // Auto-scroll to bottom when new output is added and auto-scroll is enabled
   useEffect(() => {
-    if (scrollRef.current) {
+    if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
+  }, [output, autoScroll]);
+
+  // Handle scroll to detect if we're not at the bottom
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const div = e.currentTarget;
+    const atBottom = div.scrollHeight - div.scrollTop <= div.clientHeight + 50;
+    setShowScrollToBottom(!atBottom);
+  }, []);
+
+  // Scroll to bottom on demand
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      setShowScrollToBottom(false);
+    }
+  }, []);
+  
+  // Toggle expansion of a group
+  const toggleGroupExpand = useCallback((groupId: string) => {
+    setExpandedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(groupId)) {
+        newSet.delete(groupId);
+      } else {
+        newSet.add(groupId);
+      }
+      return newSet;
+    });
+  }, []);
+  
+  // Copy console output to clipboard
+  const copyToClipboard = useCallback(() => {
+    // Format output into a string
+    const formattedOutput = output.map(item => {
+      const prefix = item.type === 'error' ? '[ERROR] ' : 
+                    item.type === 'warn' ? '[WARN] ' : 
+                    item.type === 'info' ? '[INFO] ' : 
+                    item.type === 'system' ? '[SYSTEM] ' : '';
+      
+      // Format content based on type
+      const contentStr = item.content.map(c => {
+        if (c === null) return 'null';
+        if (c === undefined) return 'undefined';
+        if (typeof c === 'object') {
+          try {
+            return JSON.stringify(c, null, 2);
+          } catch (e) {
+            return String(c);
+          }
+        }
+        return String(c);
+      }).join(' ');
+      
+      return `${prefix}${contentStr}`;
+    }).join('\n');
+    
+    // Copy to clipboard
+    navigator.clipboard.writeText(formattedOutput)
+      .then(() => {
+        setIsCopied(true);
+        toast({
+          title: "Copied!",
+          description: "Console output copied to clipboard",
+        });
+        
+        // Reset copy icon after 2 seconds
+        setTimeout(() => {
+          setIsCopied(false);
+        }, 2000);
+      })
+      .catch(err => {
+        toast({
+          title: "Error",
+          description: "Failed to copy to clipboard",
+          variant: "destructive",
+        });
+      });
+  }, [output, toast]);
+
+  // Group outputs by their execution groupId
+  const executionGroups = useMemo(() => {
+    // First, group outputs by their groupId
+    const groupedById = output.reduce<Record<string, ConsoleOutput[]>>((acc, item) => {
+      // Skip null groupId (should be rare with new code)
+      if (!item.groupId) return acc;
+      
+      if (!acc[item.groupId]) {
+        acc[item.groupId] = [];
+      }
+      acc[item.groupId].push(item);
+      return acc;
+    }, {});
+    
+    // Convert the map into an array of execution groups with metadata
+    return Object.entries(groupedById).map(([id, outputs]) => {
+      // Find the start and end markers to extract metadata
+      const startOutput = outputs.find(out => 
+        out.type === 'system' && 
+        typeof out.content[0] === 'string' && 
+        out.content[0].includes('Executing code')
+      );
+      
+      const endOutput = outputs.find(out => 
+        out.type === 'system' && 
+        typeof out.content[0] === 'string' && 
+        (out.content[0].includes('Execution completed') || 
+         out.content[0].includes('Execution failed'))
+      );
+      
+      // Extract timing information if available
+      let startTime: number | undefined;
+      let endTime: number | undefined;
+      let success: boolean | undefined;
+      
+      // Get the timestamp of the execution start
+      if (startOutput) {
+        startTime = startOutput.timestamp;
+      }
+      
+      // Parse the end message for timing info
+      if (endOutput) {
+        endTime = endOutput.timestamp;
+        success = !endOutput.content[0].toString().includes('failed');
+      }
+      
+      return {
+        id,
+        outputs: outputs.sort((a, b) => a.timestamp - b.timestamp),
+        timestamp: startOutput?.timestamp || outputs[0]?.timestamp || Date.now(),
+        startTime,
+        endTime,
+        success
+      };
+    }).sort((a, b) => b.timestamp - a.timestamp); // Sort by timestamp, newest first
+  }, [output]);
+  
+  // For ungrouped outputs (legacy or direct debug messages)
+  const ungroupedOutputs = useMemo(() => {
+    return output.filter(item => !item.groupId);
+  }, [output]);
+  
+  // Auto-expand the newest group
+  useEffect(() => {
+    if (executionGroups.length > 0) {
+      // Get the ID of the newest group
+      const newestGroupId = executionGroups[0].id;
+      // Add it to expanded groups if not already there
+      setExpandedGroups(prev => {
+        if (!prev.has(newestGroupId)) {
+          const newSet = new Set(prev);
+          // Limit number of expanded groups to 3
+          if (prev.size >= 3) {
+            // Remove oldest expanded group
+            const oldestId = Array.from(prev)[prev.size - 1];
+            newSet.delete(oldestId);
+          }
+          newSet.add(newestGroupId);
+          return newSet;
+        }
+        return prev;
+      });
+    }
+  }, [executionGroups.map(g => g.id).join(',')]);
+  
+  // For problems tab, collect all error outputs
+  const problems = useMemo(() => {
+    return output.filter(item => item.type === 'error');
   }, [output]);
 
   return (
-    <div className="h-full bg-white dark:bg-gray-800 relative overflow-hidden">
-      <Tabs defaultValue="console" className="h-full flex flex-col">
+    <div className="h-full bg-white dark:bg-gray-800 relative overflow-hidden flex flex-col">
+      <Tabs 
+        defaultValue="console" 
+        className="flex-1 flex flex-col"
+        value={activeTab}
+        onValueChange={setActiveTab}
+      >
         <div className="flex items-center px-4 py-2 border-b border-gray-200 dark:border-gray-700">
           <TabsList className="bg-transparent">
-            <TabsTrigger value="console">Console</TabsTrigger>
-            <TabsTrigger value="problems">Problems</TabsTrigger>
+            <TabsTrigger value="console" className="relative">
+              Console
+              {output.length > 0 && (
+                <Badge variant="secondary" className="ml-1.5 text-xs px-1 py-0 h-5">
+                  {output.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="problems" className="relative">
+              Problems
+              {problems.length > 0 && (
+                <Badge variant="destructive" className="ml-1.5 text-xs px-1 py-0 h-5">
+                  {problems.length}
+                </Badge>
+              )}
+            </TabsTrigger>
           </TabsList>
-          <div className="ml-auto">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onClear}
-              title="Clear console"
-            >
-              <Trash2Icon className="h-4 w-4" />
-            </Button>
+          
+          <div className="ml-auto flex gap-1">
+            {/* Current execution time display */}
+            {executionTime !== null && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="bg-gray-100 dark:bg-gray-700 text-xs px-2 py-1 rounded flex items-center">
+                      <TimerIcon className="h-3 w-3 mr-1 text-gray-500" />
+                      <span>{(executionTime / 1000).toFixed(2)}s</span>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Last execution time</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            
+            {/* Scroll to bottom button */}
+            {showScrollToBottom && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={scrollToBottom}
+                      className="animate-pulse"
+                    >
+                      <ChevronsDownIcon className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Scroll to bottom</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            
+            {/* Copy console button */}
+            {output.length > 0 && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={copyToClipboard}
+                      disabled={isCopied}
+                    >
+                      {isCopied ? (
+                        <CheckIcon className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <ClipboardCopyIcon className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Copy console output</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            
+            {/* Clear console button */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onClear}
+                    disabled={output.length === 0}
+                  >
+                    <Trash2Icon className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Clear console</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
         
-        <TabsContent value="console" className="flex-1 p-0 m-0">
-          <ScrollArea className="h-full">
-            <div ref={scrollRef} className="p-3 font-mono text-sm space-y-1">
+        <TabsContent value="console" className="flex-1 p-0 m-0 overflow-hidden">
+          <ScrollArea className="h-full" type="always">
+            <div 
+              ref={scrollRef} 
+              className="p-3 font-mono text-sm h-full" 
+              onScroll={handleScroll}
+            >
               {output.length === 0 ? (
-                <div className="text-gray-500 dark:text-gray-400 p-4 text-center italic">
-                  Run your code to see output here
+                <div className="text-gray-500 dark:text-gray-400 p-6 text-center flex flex-col items-center gap-2">
+                  <InfoIcon className="h-5 w-5 text-gray-400" />
+                  <div>
+                    <p>Run your code to see output here</p>
+                    <p className="text-xs mt-1">Press F9 or click the Run button to execute</p>
+                  </div>
                 </div>
               ) : (
-                output.map((item, index) => (
-                  <div key={index} className="flex items-start mb-1 rounded-md p-1 hover:bg-gray-50 dark:hover:bg-gray-700">
-                    <span className={`mr-2 ${getTypeColor(item.type)}`}>
-                      {getTypePrefix(item.type)}
-                    </span>
-                    <div className="flex-1">
-                      {item.lineNumber && (
-                        <span className="font-semibold mr-1 text-xs bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">
-                          Line {item.lineNumber}
-                        </span>
-                      )}
-                      {formatContent(item.content)}
+                <div className="space-y-3">
+                  {/* Grouped output display */}
+                  {executionGroups.map((group, idx) => (
+                    <OutputGroup 
+                      key={group.id} 
+                      executionGroup={group}
+                      isExpanded={expandedGroups.has(group.id)}
+                      toggleExpand={toggleGroupExpand}
+                      index={idx}
+                    />
+                  ))}
+                  
+                  {/* Ungrouped outputs */}
+                  {ungroupedOutputs.length > 0 && (
+                    <div className="border border-gray-100 dark:border-gray-700 rounded-md overflow-hidden mt-4">
+                      <div className="bg-gray-50 dark:bg-gray-900 p-1.5 px-2.5 text-xs font-medium border-b border-gray-100 dark:border-gray-700">
+                        Ungrouped Console Outputs
+                      </div>
+                      <div className="space-y-0.5 p-1.5">
+                        {ungroupedOutputs.map((item, idx) => (
+                          <ConsoleEntry 
+                            key={item.id || idx} 
+                            item={item} 
+                            index={idx} 
+                          />
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  )}
+                  
+                  {/* Execution status indicator */}
+                  {isExecuting && (
+                    <div className="animate-pulse py-2 px-3 bg-blue-50 dark:bg-blue-900/10 rounded-md border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 text-sm flex items-center">
+                      <svg className="animate-spin h-4 w-4 text-blue-500 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Executing code...
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </ScrollArea>
         </TabsContent>
         
-        <TabsContent value="problems" className="flex-1 p-0 m-0">
-          <ScrollArea className="h-full">
-            <div className="p-3 font-mono text-sm">
-              {output.filter(item => item.type === 'error').length === 0 ? (
-                <div className="text-gray-500 dark:text-gray-400 p-4 text-center italic">
-                  No problems detected
+        <TabsContent value="problems" className="flex-1 p-0 m-0 overflow-hidden">
+          <ScrollArea className="h-full" type="always">
+            <div className="p-3 font-mono text-sm h-full">
+              {problems.length === 0 ? (
+                <div className="text-gray-500 dark:text-gray-400 p-6 text-center flex flex-col items-center gap-2">
+                  <CheckIcon className="h-5 w-5 text-emerald-500" />
+                  <div>
+                    <p>No problems detected</p>
+                    <p className="text-xs mt-1">Your code is running without errors</p>
+                  </div>
                 </div>
               ) : (
-                output
-                  .filter(item => item.type === 'error')
-                  .map((item, index) => (
-                    <div key={index} className="flex items-start mb-2 p-2 bg-red-50 dark:bg-red-900/20 rounded-md">
-                      <span className="mr-2 text-red-500">▲</span>
+                <div className="space-y-2">
+                  {problems.map((item, index) => (
+                    <div key={item.id || index} className="flex items-start mb-2 p-2 bg-red-50 dark:bg-red-900/20 rounded-md border border-red-100 dark:border-red-800/30">
+                      <span className="mr-2 text-red-500 flex-shrink-0">
+                        <XCircleIcon className="h-4 w-4" />
+                      </span>
                       <div className="flex-1">
                         {item.lineNumber && (
                           <span className="font-semibold mr-1 text-xs bg-red-100 dark:bg-red-800/30 px-1 py-0.5 rounded">
@@ -90,12 +613,38 @@ export default function Console({ output, onClear }: ConsoleProps) {
                         {formatContent(item.content)}
                       </div>
                     </div>
-                  ))
+                  ))}
+                </div>
               )}
             </div>
           </ScrollArea>
         </TabsContent>
       </Tabs>
+      
+      {/* Auto-scroll control bar */}
+      <div className="flex justify-between items-center py-1.5 px-3 text-xs text-gray-500 dark:text-gray-400 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+        <span>
+          {autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={toggleAutoScroll}
+          className="h-6 gap-1 text-xs"
+        >
+          {autoScroll ? (
+            <>
+              <PauseIcon className="h-3 w-3" />
+              <span className="hidden sm:inline">Pause scroll</span>
+            </>
+          ) : (
+            <>
+              <PlayIcon className="h-3 w-3" />
+              <span className="hidden sm:inline">Resume scroll</span>
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -106,9 +655,11 @@ function getTypeColor(type: string): string {
     case 'error':
       return 'text-red-500';
     case 'warn':
-      return 'text-yellow-500';
+      return 'text-amber-500';
     case 'info':
       return 'text-blue-500';
+    case 'system':
+      return 'text-purple-500';
     default:
       return 'text-gray-500 dark:text-gray-400';
   }
@@ -122,36 +673,163 @@ function getTypePrefix(type: string): string {
       return '⚠';
     case 'info':
       return 'ℹ';
+    case 'system':
+      return '⚙';
     default:
       return '>';
   }
 }
 
-function formatContent(content: any[]): JSX.Element {
-  const formattedContent = content.map(item => {
-    let stringContent = '';
-    
-    if (typeof item === 'object') {
-      try {
-        stringContent = JSON.stringify(item, null, 2);
-      } catch (e) {
-        stringContent = String(item);
-      }
-    } else {
-      stringContent = String(item);
-    }
-    
-    // Handle multiline content (like code blocks or guides)
-    if (stringContent.includes('\n')) {
-      return (
-        <pre className="whitespace-pre-wrap break-words font-mono text-xs bg-gray-100 dark:bg-gray-800 p-2 my-1 rounded">
-          {stringContent}
-        </pre>
-      );
-    }
-    
-    return stringContent;
-  }).join(' ');
+// Helper function to copy individual output content
+const CopyableOutput = memo(({ content, children }: { content: string, children: React.ReactNode }) => {
+  const [isCopied, setIsCopied] = useState(false);
+  const { toast } = useToast();
   
-  return <>{formattedContent}</>;
+  const copyContent = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    navigator.clipboard.writeText(content)
+      .then(() => {
+        setIsCopied(true);
+        toast({
+          title: "Copied!",
+          description: "Content copied to clipboard",
+        });
+        
+        setTimeout(() => {
+          setIsCopied(false);
+        }, 2000);
+      })
+      .catch(err => {
+        toast({
+          title: "Error",
+          description: "Failed to copy to clipboard",
+          variant: "destructive",
+        });
+      });
+  }, [content, toast]);
+  
+  return (
+    <div className="group relative">
+      {children}
+      <button 
+        onClick={copyContent}
+        className="absolute top-1 right-1 p-1 rounded-md bg-gray-100 dark:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+        title="Copy to clipboard"
+      >
+        {isCopied ? (
+          <CheckIcon className="h-3 w-3 text-green-500" />
+        ) : (
+          <ClipboardCopyIcon className="h-3 w-3" />
+        )}
+      </button>
+    </div>
+  );
+});
+
+CopyableOutput.displayName = 'CopyableOutput';
+
+function formatContent(content: any[]): JSX.Element {
+  if (!content || content.length === 0) {
+    return <></>;
+  }
+
+  return (
+    <>
+      {content.map((item, index) => {
+        // Handle different data types appropriately
+        if (item === null) {
+          return <span key={index} className="text-gray-500">null</span>;
+        }
+        
+        if (item === undefined) {
+          return <span key={index} className="text-gray-500">undefined</span>;
+        }
+        
+        if (typeof item === 'object') {
+          let stringContent = '';
+          try {
+            // Prettify objects
+            stringContent = JSON.stringify(item, (key, value) => {
+              // Handle special cases
+              if (value === undefined) return 'undefined';
+              if (typeof value === 'function') return '[Function]';
+              if (value instanceof Error) return {
+                name: value.name,
+                message: value.message,
+                stack: value.stack
+              };
+              return value;
+            }, 2);
+          } catch (e) {
+            stringContent = String(item);
+          }
+          
+          // For objects, always use a pretty-print style with copy functionality
+          return (
+            <CopyableOutput key={index} content={stringContent}>
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs bg-gray-50 dark:bg-gray-800 p-2 my-1 rounded">
+                {stringContent}
+              </pre>
+            </CopyableOutput>
+          );
+        }
+        
+        // Special formatting for system messages
+        if (typeof item === 'string') {
+          // Timing information
+          if (item.includes('Execution completed in') || item.includes('Execution failed')) {
+            const timeMatch = item.match(/(\d+(\.\d+)?)ms/);
+            const timeValue = timeMatch ? parseFloat(timeMatch[1]) : null;
+            
+            if (timeValue !== null) {
+              const formattedTime = timeValue >= 1000 
+                ? `${(timeValue / 1000).toFixed(2)}s` 
+                : `${timeValue.toFixed(0)}ms`;
+              
+              const timeText = item.includes('failed') 
+                ? `Execution failed after ${formattedTime}`
+                : `Execution completed in ${formattedTime}`;
+              
+              return (
+                <span key={index} className={
+                  item.includes('failed') ? "text-red-600 font-medium" : "text-emerald-600 font-medium"
+                }>
+                  {timeText}
+                </span>
+              );
+            }
+          }
+          
+          // Execution start message
+          if (item.includes('Executing code')) {
+            return (
+              <span key={index} className="text-blue-600 font-medium">{item}</span>
+            );
+          }
+          
+          // Large output warning
+          if (item.includes('Large output detected')) {
+            return (
+              <span key={index} className="text-amber-600 font-medium">{item}</span>
+            );
+          }
+          
+          // Truncation marker
+          if (item.includes('[truncated,')) {
+            const parts = item.split('[truncated,');
+            return (
+              <span key={index}>
+                {parts[0]}
+                <span className="text-amber-500 italic">[truncated, {parts[1]}</span>
+              </span>
+            );
+          }
+        }
+        
+        // For regular strings
+        return <span key={index} className="mr-1">{String(item)}</span>;
+      })}
+    </>
+  );
 }

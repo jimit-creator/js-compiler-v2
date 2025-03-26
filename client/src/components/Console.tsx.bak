@@ -1,0 +1,485 @@
+import { useRef, useEffect, useState, useCallback, memo, useMemo } from "react";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Trash2Icon, ChevronsDownIcon, ClipboardCopyIcon, CheckIcon, PauseIcon, PlayIcon } from "lucide-react";
+import { ConsoleOutput } from "@/contexts/CodeContext";
+import { useToast } from "@/hooks/use-toast";
+import { useCode } from "@/contexts/CodeContext";
+
+interface ConsoleProps {
+  output: ConsoleOutput[];
+  onClear: () => void;
+}
+
+// Memoize individual console output entries to prevent unnecessary re-renders
+const ConsoleEntry = memo(({ item, groupIndex, index }: { 
+  item: ConsoleOutput; 
+  groupIndex: number;
+  index: number;
+}) => {
+  return (
+    <div 
+      key={`${groupIndex}-${index}`} 
+      className={`flex items-start p-1.5 rounded-md
+        ${item.type === 'info' && item.content[0]?.toString().includes('Execution completed') 
+          ? 'bg-green-50 dark:bg-green-900/10 border-l-2 border-green-500'
+          : item.type === 'info' && item.content[0]?.toString().includes('Execution failed')
+            ? 'bg-red-50 dark:bg-red-900/10 border-l-2 border-red-500'
+            : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+        }
+      `}
+    >
+      <span className={`mr-2 ${getTypeColor(item.type)}`}>
+        {getTypePrefix(item.type)}
+      </span>
+      <div className="flex-1">
+        {item.lineNumber && (
+          <span className="font-semibold mr-1 text-xs bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded">
+            Line {item.lineNumber}
+          </span>
+        )}
+        {formatContent(item.content)}
+      </div>
+    </div>
+  );
+});
+
+// Memoize group of console outputs
+const OutputGroup = memo(({ group, groupIndex }: { 
+  group: { heading?: ConsoleOutput, items: ConsoleOutput[] };
+  groupIndex: number;
+}) => {
+  return (
+    <div className="border border-gray-100 dark:border-gray-700 rounded-md overflow-hidden">
+      {group.heading && (
+        <div className="bg-gray-50 dark:bg-gray-900 p-1.5 px-2.5 text-xs font-medium border-b border-gray-100 dark:border-gray-700 flex items-center">
+          <span className={`mr-2 ${getTypeColor(group.heading.type)}`}>
+            {getTypePrefix(group.heading.type)}
+          </span>
+          <span>{group.heading.content[0]}</span>
+        </div>
+      )}
+      
+      <div className="space-y-0.5 p-1">
+        {group.items.map((item, index) => (
+          <ConsoleEntry 
+            key={`${groupIndex}-${index}-${item.timestamp || index}`} 
+            item={item} 
+            groupIndex={groupIndex} 
+            index={index} 
+          />
+        ))}
+      </div>
+    </div>
+  );
+});
+
+export default function Console({ output, onClear }: ConsoleProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("console");
+  const [isCopied, setIsCopied] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const { toast } = useToast();
+  const { isExecuting } = useCode();
+  
+  // Auto-scroll to bottom when new output is added and auto-scroll is enabled
+  useEffect(() => {
+    if (autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [output, autoScroll]);
+
+  // Handle scroll to detect if we're not at the bottom
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const div = e.currentTarget;
+    const atBottom = div.scrollHeight - div.scrollTop <= div.clientHeight + 50;
+    setShowScrollToBottom(!atBottom);
+    
+    // If user manually scrolled up, disable auto-scroll
+    if (!atBottom && autoScroll) {
+      setAutoScroll(false);
+    }
+    
+    // If user manually scrolled to bottom, re-enable auto-scroll
+    if (atBottom && !autoScroll) {
+      setAutoScroll(true);
+    }
+  }, [autoScroll]);
+
+  // Scroll to bottom on demand
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      setShowScrollToBottom(false);
+      setAutoScroll(true);
+    }
+  }, []);
+  
+  // Toggle auto-scroll behavior
+  const toggleAutoScroll = useCallback(() => {
+    setAutoScroll(prev => !prev);
+    if (!autoScroll && scrollRef.current) {
+      // If re-enabling, immediately scroll to bottom
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [autoScroll]);
+  
+  // Copy console output to clipboard
+  const copyToClipboard = useCallback(() => {
+    // Format output into a string
+    const formattedOutput = output.map(item => {
+      const prefix = item.type === 'error' ? '[ERROR] ' : 
+                    item.type === 'warn' ? '[WARN] ' : 
+                    item.type === 'info' ? '[INFO] ' : '';
+      
+      // Format content based on type
+      const contentStr = item.content.map(c => {
+        if (c === null) return 'null';
+        if (c === undefined) return 'undefined';
+        if (typeof c === 'object') {
+          try {
+            return JSON.stringify(c, null, 2);
+          } catch (e) {
+            return String(c);
+          }
+        }
+        return String(c);
+      }).join(' ');
+      
+      return `${prefix}${contentStr}`;
+    }).join('\n');
+    
+    // Copy to clipboard
+    navigator.clipboard.writeText(formattedOutput)
+      .then(() => {
+        setIsCopied(true);
+        toast({
+          title: "Copied!",
+          description: "Console output copied to clipboard",
+        });
+        
+        // Reset copy icon after 2 seconds
+        setTimeout(() => {
+          setIsCopied(false);
+        }, 2000);
+      })
+      .catch(err => {
+        toast({
+          title: "Error",
+          description: "Failed to copy to clipboard",
+          variant: "destructive",
+        });
+      });
+  }, [output, toast]);
+
+  // Memoize grouped outputs to improve rendering performance
+  const groupedOutputs = useMemo(() => {
+    return output.reduce<{ heading?: ConsoleOutput, items: ConsoleOutput[] }[]>((acc, item) => {
+      // If this is a run start marker, start a new group
+      if (item.type === 'info' && item.content[0]?.toString().includes('Run started')) {
+        acc.push({ heading: item, items: [] });
+      } 
+      // Otherwise add to the current group, or create a default group if none exists
+      else {
+        if (acc.length === 0) {
+          acc.push({ items: [] });
+        }
+        acc[acc.length - 1].items.push(item);
+      }
+      return acc;
+    }, []);
+  }, [output]);
+
+  return (
+    <div className="h-full bg-white dark:bg-gray-800 relative overflow-hidden">
+      <Tabs 
+        defaultValue="console" 
+        className="h-full flex flex-col"
+        value={activeTab}
+        onValueChange={setActiveTab}
+      >
+        <div className="flex items-center px-4 py-2 border-b border-gray-200 dark:border-gray-700">
+          <TabsList className="bg-transparent">
+            <TabsTrigger value="console">Console</TabsTrigger>
+            <TabsTrigger value="problems">Problems</TabsTrigger>
+          </TabsList>
+          <div className="ml-auto flex gap-1">
+            {showScrollToBottom && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={scrollToBottom}
+                title="Scroll to bottom"
+                className="animate-pulse"
+              >
+                <ChevronsDownIcon className="h-4 w-4" />
+              </Button>
+            )}
+            {output.length > 0 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={copyToClipboard}
+                title="Copy console output"
+                disabled={isCopied}
+              >
+                {isCopied ? (
+                  <CheckIcon className="h-4 w-4 text-green-500" />
+                ) : (
+                  <ClipboardCopyIcon className="h-4 w-4" />
+                )}
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClear}
+              title="Clear console"
+            >
+              <Trash2Icon className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+        
+        <TabsContent value="console" className="flex-1 p-0 m-0 h-full">
+          <ScrollArea className="h-full" type="always">
+            <div 
+              ref={scrollRef} 
+              className="p-3 font-mono text-sm h-full" 
+              onScroll={handleScroll}
+            >
+              {output.length === 0 ? (
+                <div className="text-gray-500 dark:text-gray-400 p-4 text-center italic">
+                  Run your code to see output here
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {groupedOutputs.map((group, groupIndex) => (
+                    <OutputGroup 
+                      key={`group-${groupIndex}-${group.heading?.timestamp || groupIndex}`} 
+                      group={group} 
+                      groupIndex={groupIndex} 
+                    />
+                  ))}
+                  
+                  {/* Execution status indicator */}
+                  {isExecuting && (
+                    <div className="animate-pulse py-2 px-3 bg-blue-50 dark:bg-blue-900/10 rounded-md border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 text-sm flex items-center">
+                      <svg className="animate-spin h-4 w-4 text-blue-500 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Executing code...
+                    </div>
+                  )}
+                  
+                  {/* Auto-scroll indicator */}
+                  <div className="flex justify-between items-center py-1 px-2 text-xs text-gray-500 dark:text-gray-400 border-t border-gray-100 dark:border-gray-700">
+                    <span>
+                      {autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={toggleAutoScroll}
+                      className="h-6 gap-1 text-xs"
+                    >
+                      {autoScroll ? (
+                        <>
+                          <PauseIcon className="h-3 w-3" />
+                          Pause scroll
+                        </>
+                      ) : (
+                        <>
+                          <PlayIcon className="h-3 w-3" />
+                          Resume scroll
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        </TabsContent>
+        
+        <TabsContent value="problems" className="flex-1 p-0 m-0 h-full">
+          <ScrollArea className="h-full" type="always">
+            <div className="p-3 font-mono text-sm h-full">
+              {output.filter(item => item.type === 'error').length === 0 ? (
+                <div className="text-gray-500 dark:text-gray-400 p-4 text-center italic">
+                  No problems detected
+                </div>
+              ) : (
+                output
+                  .filter(item => item.type === 'error')
+                  .map((item, index) => (
+                    <div key={index} className="flex items-start mb-2 p-2 bg-red-50 dark:bg-red-900/20 rounded-md">
+                      <span className="mr-2 text-red-500">✖</span>
+                      <div className="flex-1">
+                        {item.lineNumber && (
+                          <span className="font-semibold mr-1 text-xs bg-red-100 dark:bg-red-800/30 px-1 py-0.5 rounded">
+                            Line {item.lineNumber}
+                          </span>
+                        )}
+                        {formatContent(item.content)}
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+          </ScrollArea>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// Helper functions for console display
+function getTypeColor(type: string): string {
+  switch (type) {
+    case 'error':
+      return 'text-red-500';
+    case 'warn':
+      return 'text-yellow-500';
+    case 'info':
+      return 'text-blue-500';
+    default:
+      return 'text-gray-500 dark:text-gray-400';
+  }
+}
+
+function getTypePrefix(type: string): string {
+  switch (type) {
+    case 'error':
+      return '✖';
+    case 'warn':
+      return '⚠';
+    case 'info':
+      return 'ℹ';
+    default:
+      return '>';
+  }
+}
+
+// Helper function to copy individual output content
+const CopyableOutput = ({ content, children }: { content: string, children: React.ReactNode }) => {
+  const [isCopied, setIsCopied] = useState(false);
+  const { toast } = useToast();
+  
+  const copyContent = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    navigator.clipboard.writeText(content)
+      .then(() => {
+        setIsCopied(true);
+        toast({
+          title: "Copied!",
+          description: "Content copied to clipboard",
+        });
+        
+        setTimeout(() => {
+          setIsCopied(false);
+        }, 2000);
+      })
+      .catch(err => {
+        toast({
+          title: "Error",
+          description: "Failed to copy to clipboard",
+          variant: "destructive",
+        });
+      });
+  };
+  
+  return (
+    <div className="group relative">
+      {children}
+      <button 
+        onClick={copyContent}
+        className="absolute top-1 right-1 p-1 rounded-md bg-gray-100 dark:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+        title="Copy to clipboard"
+      >
+        {isCopied ? (
+          <CheckIcon className="h-3 w-3 text-green-500" />
+        ) : (
+          <ClipboardCopyIcon className="h-3 w-3" />
+        )}
+      </button>
+    </div>
+  );
+};
+
+function formatContent(content: any[]): JSX.Element {
+  if (!content || content.length === 0) {
+    return <></>;
+  }
+
+  return (
+    <>
+      {content.map((item, index) => {
+        // Handle different data types appropriately
+        if (item === null) {
+          return <span key={index} className="text-gray-500">null</span>;
+        }
+        
+        if (item === undefined) {
+          return <span key={index} className="text-gray-500">undefined</span>;
+        }
+        
+        if (typeof item === 'object') {
+          let stringContent = '';
+          try {
+            // Prettify objects
+            stringContent = JSON.stringify(item, (key, value) => {
+              // Handle special cases
+              if (value === undefined) return 'undefined';
+              if (typeof value === 'function') return '[Function]';
+              return value;
+            }, 2);
+          } catch (e) {
+            stringContent = String(item);
+          }
+          
+          // For objects, always use a pretty-print style with copy functionality
+          return (
+            <CopyableOutput key={index} content={stringContent}>
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs bg-gray-50 dark:bg-gray-800 p-2 my-1 rounded">
+                {stringContent}
+              </pre>
+            </CopyableOutput>
+          );
+        }
+        
+        // Special case for execution time messages
+        if (typeof item === 'string' && 
+            (item.includes('Execution completed in') || 
+             item.includes('Execution failed after'))) {
+          return (
+            <span key={index} className="font-medium text-xs">
+              {item.includes('completed') 
+                ? <span className="text-green-600 dark:text-green-400">{item}</span>
+                : <span className="text-red-600 dark:text-red-400">{item}</span>
+              }
+            </span>
+          );
+        }
+        
+        // Handle multiline strings with copy functionality
+        if (typeof item === 'string' && item.includes('\n')) {
+          return (
+            <CopyableOutput key={index} content={item}>
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs bg-gray-50 dark:bg-gray-800 p-2 my-1 rounded">
+                {item}
+              </pre>
+            </CopyableOutput>
+          );
+        }
+        
+        // Format other primitive values
+        return <span key={index}>{String(item)}{index < content.length - 1 ? ' ' : ''}</span>;
+      })}
+    </>
+  );
+}

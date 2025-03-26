@@ -10,6 +10,11 @@ import ShareModal from "@/components/ShareModal";
 import { useCode } from "@/contexts/CodeContext";
 import { useToast } from "@/hooks/use-toast";
 import { CodeSnippet } from "@shared/schema";
+import { 
+  ResizableHandle, 
+  ResizablePanel, 
+  ResizablePanelGroup 
+} from "@/components/ui/resizable";
 
 export default function Home() {
   const { shareId } = useParams();
@@ -27,7 +32,8 @@ export default function Home() {
     showLineNumbers, 
     toggleLineNumbers,
     autoRun,
-    toggleAutoRun
+    toggleAutoRun,
+    isExecuting
   } = useCode();
 
   // Fetch code snippet if shareId is provided
@@ -55,7 +61,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200">
+    <div className="h-screen flex flex-col dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200 overflow-hidden">
       <Header 
         onShareClick={toggleShareModal} 
         onMenuClick={toggleMobileMenu}
@@ -97,25 +103,54 @@ export default function Home() {
           toggleAutoRun={toggleAutoRun}
         />
         
-        {/* Main Content Area - Horizontal layout with editor and output side by side */}
-        <div className="flex-1 flex flex-col lg:flex-row">
-          {/* Editor Container */}
-          <div className="flex-1 lg:w-1/2">
-            <CodeEditor 
-              code={code}
-              setCode={setCode}
-              onRun={runCode}
-              onClear={() => setCode("")}
-              showLineNumbers={showLineNumbers}
-            />
+        {/* Main Content Area - Resizable panels for editor and console */}
+        <div className="flex-1 flex flex-col">
+          {/* Mobile stacked layout */}
+          <div className="lg:hidden flex-1 flex flex-col">
+            <div className="flex-1 min-h-[40vh]">
+              <CodeEditor 
+                code={code}
+                setCode={setCode}
+                onRun={runCode}
+                onClear={() => setCode("")}
+                showLineNumbers={showLineNumbers}
+              />
+            </div>
+            <div className="flex-1 min-h-[40vh] border-t border-gray-200 dark:border-gray-700">
+              <Console 
+                output={consoleOutput}
+                onClear={clearConsole}
+              />
+            </div>
           </div>
           
-          {/* Console Container - Now beside rather than below */}
-          <div className="lg:w-1/2 lg:border-l border-gray-200 dark:border-gray-700">
-            <Console 
-              output={consoleOutput}
-              onClear={clearConsole}
-            />
+          {/* Desktop resizable layout */}
+          <div className="hidden lg:block h-full flex-1">
+            <ResizablePanelGroup
+              direction="horizontal"
+              className="h-full rounded-lg border border-gray-200 dark:border-gray-700"
+            >
+              <ResizablePanel defaultSize={50} minSize={20} className="h-full">
+                <div className="h-full">
+                  <CodeEditor 
+                    code={code}
+                    setCode={setCode}
+                    onRun={runCode}
+                    onClear={() => setCode("")}
+                    showLineNumbers={showLineNumbers}
+                  />
+                </div>
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+              <ResizablePanel defaultSize={50} minSize={20} className="h-full">
+                <div className="h-full border-l border-gray-200 dark:border-gray-700">
+                  <Console 
+                    output={consoleOutput}
+                    onClear={clearConsole}
+                  />
+                </div>
+              </ResizablePanel>
+            </ResizablePanelGroup>
           </div>
         </div>
       </main>

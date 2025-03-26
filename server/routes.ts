@@ -122,15 +122,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Instead of using VM which has issues with 'require', use Function constructor with a wrapper
         // that simulates browser environment and catches errors
         
-        // First, preprocess the code to check for Node.js-specific features
+        // First, preprocess the code to check for Node.js-specific features and ensure it's browser-compatible
         const containsRequire = code.includes('require(') || code.includes('require (');
+        const containsProcessEnv = code.includes('process.env');
+        const containsImport = /import\s+(?:\*\s+as\s+\w+|{\s*[\w\s,]+}\s+from|\w+\s+from)\s+['"]/.test(code);
         
+        // Detect disallowed Node.js-specific features
         if (containsRequire) {
           return res.json({
             logs: [],
             errors: [{
               type: 'error',
               content: ["'require' is not available in this environment. Browser JavaScript doesn't support importing Node.js modules with require. Consider using browser-compatible code."]
+            }],
+            result: undefined
+          });
+        }
+        
+        if (containsProcessEnv) {
+          return res.json({
+            logs: [],
+            errors: [{
+              type: 'error',
+              content: ["'process.env' is not available in this environment. Browser JavaScript doesn't have access to Node.js environment variables. Consider using browser-compatible code."]
+            }],
+            result: undefined
+          });
+        }
+        
+        if (containsImport) {
+          return res.json({
+            logs: [],
+            errors: [{
+              type: 'error',
+              content: ["ES module imports are not supported in this environment. This code editor doesn't support ES module syntax. Consider using standard JavaScript without imports."]
             }],
             result: undefined
           });
@@ -193,27 +218,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Execute the code and capture the result
               result = eval(code);
               
-              // If result is a Promise, await it safely
+              // If result is a Promise, await it safely but don't add duplicate logs
               if (result && typeof result === 'object' && typeof result.then === 'function') {
                 try {
-                  const resolvedResult = await result;
-                  // Only add the Promise result to the logs if it's not null/undefined
-                  if (resolvedResult !== null && resolvedResult !== undefined) {
-                    allLogs.push({ 
-                      type: 'info', 
-                      content: ['Promise result:', resolvedResult] 
-                    });
+                  // Only resolve the Promise, but don't add extra logs
+                  // This prevents duplicate outputs when calling async functions
+                  result = await result;
+                  
+                  // If the resolved result is still a promise, we need to be careful
+                  if (result && typeof result === 'object' && typeof result.then === 'function') {
+                    result = await result;
                   }
-                  result = resolvedResult;
                 } catch (promiseError) {
-                  allLogs.push({ 
+                  // Create a single error log for Promise rejection
+                  const promiseErrorLog = { 
                     type: 'error', 
                     content: ['Promise rejected with error:', promiseError.message || 'Unknown Promise error'] 
-                  });
-                  errors.push({ 
-                    type: 'error', 
-                    content: ['Promise rejected with error:', promiseError.message || 'Unknown Promise error'] 
-                  });
+                  };
+                  
+                  // Add to both collections, but only create the object once
+                  allLogs.push(promiseErrorLog);
+                  errors.push(promiseErrorLog);
                   result = undefined;
                 }
               }
@@ -248,26 +273,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
               console.info = originalConsole.info;
             }
             
-            // Extract any error logs for error handling in the UI
-            // Filter errors from allLogs to extract error logs for the error panel
-            const extractedErrors = allLogs.filter(log => log.type === 'error');
-            
-            // Return all captured data with logs in the correct order
+            // Return all captured data with logs and errors in the correct order
+            // We already have specific errors collected in the 'errors' array
             return {
               logs: allLogs,
-              errors: extractedErrors,
+              errors: errors,
               result: result !== undefined ? result : undefined
             };
           })();
         `);
         
         // Execute the code in the safe environment
+        // We're making several improvements here:
+        // 1. Handling potential syntax errors before execution
+        // 2. Better line number extraction for errors
+        // 3. Improved async function detection and handling
+        // 4. Proper awaiting of promises
+        
+        // First check for obvious syntax errors
+        try {
+          // This will throw if there are syntax errors
+          new Function(code);
+        } catch (syntaxError: any) {
+          // Extract line number if possible
+          let lineNumber = null;
+          let errorMessage = syntaxError.message;
+          
+          const lineMatch = errorMessage.match(/(?:at\s+line\s+(\d+)|<anonymous>:(\d+):)/i);
+          if (lineMatch) {
+            lineNumber = parseInt(lineMatch[1] || lineMatch[2]);
+            errorMessage = `Error at line ${lineNumber}: ${errorMessage.split(':').pop().trim()}`;
+          }
+          
+          return res.json({
+            logs: [],
+            errors: [{ 
+              type: 'error', 
+              content: [errorMessage],
+              lineNumber
+            }],
+            result: undefined
+          });
+        }
+        
         const { logs: capturedLogs, errors: capturedErrors, result } = await executeCode(code);
+        
+        // Format result value - if it's an object, convert to JSON string for better display
+        let formattedResult = result;
+        if (formattedResult !== undefined) {
+          // Add a safety check for Promise objects
+          if (formattedResult && typeof formattedResult === 'object' && typeof formattedResult.then === 'function') {
+            try {
+              // Try to resolve any lingering promises
+              formattedResult = await formattedResult;
+            } catch (e) {
+              // If Promise resolution fails, just use a placeholder
+              formattedResult = "[Unresolved Promise]";
+            }
+          }
+          
+          if (typeof formattedResult === 'object' && formattedResult !== null) {
+            try {
+              formattedResult = JSON.stringify(formattedResult, null, 2);
+            } catch (e) {
+              formattedResult = String(formattedResult); // Fallback to String if JSON conversion fails
+            }
+          } else {
+            formattedResult = String(formattedResult);
+          }
+        }
         
         return res.json({ 
           logs: capturedLogs, 
           errors: capturedErrors,
-          result: result !== undefined ? String(result) : undefined 
+          result: formattedResult 
         });
       } catch (execError: any) {
         return res.json({ 
