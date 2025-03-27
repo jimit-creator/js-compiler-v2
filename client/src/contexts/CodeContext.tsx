@@ -32,10 +32,13 @@ interface CodeContextType {
 const CodeContext = createContext<CodeContextType | undefined>(undefined);
 
 // Configuration for performance optimization
-const MAX_CONSOLE_OUTPUTS = 1000; // Maximum number of console outputs to keep
+const MAX_CONSOLE_OUTPUTS = 500; // Maximum number of console outputs to keep (reduced from 1000)
 const AUTO_RUN_DEBOUNCE_MS = 800; // Debounce time for auto-run in milliseconds
-const LARGE_OUTPUT_THRESHOLD = 50000; // Character count threshold for large outputs
-const MAX_CONTENT_LENGTH = 100000; // Maximum length for any single output content
+const LARGE_OUTPUT_THRESHOLD = 20000; // Character count threshold for large outputs (reduced from 50000)
+const MAX_CONTENT_LENGTH = 50000; // Maximum length for any single output content (reduced from 100000)
+const MAX_EXECUTION_HISTORY = 20; // Maximum number of execution groups to keep
+const MAX_SINGLE_EXECUTION_LOGS = 100; // Maximum logs per execution group
+const MAX_ARRAY_ITEMS_TO_DISPLAY = 50; // For arrays with more items, we'll truncate
 
 // Helper to generate unique IDs
 const generateId = () => Math.random().toString(36).substring(2, 10);
@@ -113,8 +116,87 @@ export function CodeProvider({ children }: { children: ReactNode }) {
     setCodeInternal(newCode);
   }, []);
   
+  // Helper function to truncate large arrays/objects to save memory
+  const truncateLargeData = useCallback((data: any): any => {
+    // Handle basic primitives directly
+    if (data === null || data === undefined || typeof data === 'number' || 
+        typeof data === 'boolean' || typeof data === 'function' || typeof data === 'symbol') {
+      return data;
+    }
+    
+    // Handle strings - truncate if too long
+    if (typeof data === 'string') {
+      if (data.length > MAX_CONTENT_LENGTH) {
+        return `${data.substring(0, MAX_CONTENT_LENGTH)}... [truncated, ${(data.length / 1000).toFixed(1)}kb total]`;
+      }
+      return data;
+    }
+    
+    // Handle arrays - truncate if too many items or deeply nested
+    if (Array.isArray(data)) {
+      if (data.length > MAX_ARRAY_ITEMS_TO_DISPLAY) {
+        const truncated = data.slice(0, MAX_ARRAY_ITEMS_TO_DISPLAY);
+        // Process each item recursively but with a depth limit
+        return truncated.map(item => truncateLargeData(item))
+          .concat([`... ${data.length - MAX_ARRAY_ITEMS_TO_DISPLAY} more items (truncated to save memory)`]);
+      }
+      return data.map(item => truncateLargeData(item));
+    }
+    
+    // Handle objects - truncate if too large
+    if (typeof data === 'object') {
+      const keys = Object.keys(data);
+      
+      // Special case for DOM nodes which can cause circular references
+      if (data.nodeType && typeof data.nodeName === 'string') {
+        return `[DOM Node: ${data.nodeName}]`;
+      }
+      
+      // For very large objects, truncate aggressively
+      if (keys.length > MAX_ARRAY_ITEMS_TO_DISPLAY) {
+        const truncatedObj: Record<string, any> = {};
+        const truncatedKeys = keys.slice(0, MAX_ARRAY_ITEMS_TO_DISPLAY);
+        
+        for (const key of truncatedKeys) {
+          truncatedObj[key] = truncateLargeData(data[key]);
+        }
+        
+        truncatedObj[`... ${keys.length - MAX_ARRAY_ITEMS_TO_DISPLAY} more properties`] = 
+          `(truncated to save memory)`;
+        
+        return truncatedObj;
+      }
+      
+      // Process regular objects recursively
+      const processedObj: Record<string, any> = {};
+      for (const key of keys) {
+        processedObj[key] = truncateLargeData(data[key]);
+      }
+      
+      return processedObj;
+    }
+    
+    // Fallback for any other type
+    return String(data);
+  }, []);
+  
   // Process console output to ensure performance
   const processConsoleOutputs = useCallback((outputs: ConsoleOutput[]): ConsoleOutput[] => {
+    // Limit the number of outputs in a single batch
+    if (outputs.length > MAX_SINGLE_EXECUTION_LOGS) {
+      outputs = [
+        ...outputs.slice(0, MAX_SINGLE_EXECUTION_LOGS - 2),
+        {
+          type: 'warn',
+          content: [`Output limited to ${MAX_SINGLE_EXECUTION_LOGS} logs to save memory`],
+          timestamp: Date.now(),
+          id: generateId(),
+          groupId: outputs[0]?.groupId || generateId()
+        },
+        outputs[outputs.length - 1] // Keep the last message (usually completion)
+      ];
+    }
+    
     return outputs.map(output => {
       // Create a processed copy with all required fields
       const processed: ConsoleOutput = {
@@ -123,16 +205,11 @@ export function CodeProvider({ children }: { children: ReactNode }) {
         id: output.id || generateId(), // Ensure ID exists for React keys
         groupId: output.groupId || generateId(), // Ensure groupId exists
         // Process content to prevent memory/rendering issues with large outputs
-        content: output.content.map(item => {
-          if (typeof item === 'string' && item.length > MAX_CONTENT_LENGTH) {
-            return `${item.substring(0, MAX_CONTENT_LENGTH)}... [truncated, ${(item.length / 1000).toFixed(1)}kb total]`;
-          }
-          return item;
-        })
+        content: output.content.map(item => truncateLargeData(item))
       };
       return processed;
     });
-  }, []);
+  }, [truncateLargeData]);
   
   // Internal function to run code that can take a code parameter
   const runCodeInternal = useCallback(async (codeToRun: string) => {
@@ -296,41 +373,109 @@ export function CodeProvider({ children }: { children: ReactNode }) {
       // Process the outputs to ensure performance
       const processedOutputs = processConsoleOutputs(newOutputs);
       
-      // Append new outputs to existing ones, with truncation for performance
+      // Append new outputs to existing ones, but more intelligently manage memory
       setConsoleOutput(prev => {
+        // Get all the unique execution group IDs in the current output
+        const executionGroups = new Set<string>();
+        [...prev, ...processedOutputs].forEach(output => {
+          if (output.groupId) executionGroups.add(output.groupId);
+        });
+        
+        // If we have more execution groups than our max limit, we need to trim
+        if (executionGroups.size > MAX_EXECUTION_HISTORY) {
+          // Convert to array for easier manipulation
+          const groupIds = Array.from(executionGroups);
+          
+          // We want to remove older execution groups 
+          // (but skip the very first one which might be system messages)
+          const groupsToRemove = groupIds.slice(1, groupIds.length - MAX_EXECUTION_HISTORY + 1);
+          const groupsToKeep = new Set(groupIds.filter(id => !groupsToRemove.includes(id)));
+          
+          // Filter out logs from removed groups
+          const trimmedLogs = prev.filter(output => groupsToKeep.has(output.groupId));
+          
+          // Add memory cleanup notification
+          const cleanupMessage: ConsoleOutput = {
+            type: 'warn',
+            content: [`Cleared ${groupsToRemove.length} older execution logs to save memory`],
+            timestamp: Date.now(),
+            id: generateId(),
+            groupId: generateId() // Give it a unique group ID
+          };
+          
+          // Combine with new outputs
+          return [...trimmedLogs, cleanupMessage, ...processedOutputs];
+        }
+        
+        // If we're still under our limits for execution groups,
+        // but over the total log count limit, trim the oldest logs
         const combined = [...prev, ...processedOutputs];
-        // If we exceed the maximum length, truncate older entries
-        return combined.length > MAX_CONSOLE_OUTPUTS 
-          ? combined.slice(-MAX_CONSOLE_OUTPUTS) 
-          : combined;
+        if (combined.length > MAX_CONSOLE_OUTPUTS) {
+          return combined.slice(-MAX_CONSOLE_OUTPUTS);
+        }
+        
+        return combined;
       });
       
       // Update the previous code ref after successfully running
       previousCodeRef.current = codeToRun;
     } catch (error: any) {
-      // Add error output
-      setConsoleOutput(prev => [
-        ...prev, 
-        { 
+      // Add error output and failed message in a single state update to reduce re-renders
+      setConsoleOutput(prev => {
+        // First, apply the same memory management as successful executions
+        const executionGroups = new Set<string>();
+        prev.forEach(output => {
+          if (output.groupId) executionGroups.add(output.groupId);
+        });
+        
+        // Prepare the new error outputs
+        const errorOutput: ConsoleOutput = { 
           type: 'error', 
           content: [error.message || 'Error executing code'],
           timestamp: Date.now(),
           id: generateId(),
           groupId: executionGroupId
-        }
-      ]);
-      
-      // Add execution failed message
-      setConsoleOutput(prev => [
-        ...prev, 
-        { 
+        };
+        
+        const failedMessage: ConsoleOutput = { 
           type: 'system', 
           content: [`Execution failed`],
           timestamp: Date.now(),
           id: generateId(), 
           groupId: executionGroupId
+        };
+        
+        // If we have too many execution groups, trim the old ones
+        if (executionGroups.size >= MAX_EXECUTION_HISTORY) {
+          // Convert to array for easier manipulation
+          const groupIds = Array.from(executionGroups);
+          
+          // We want to remove older execution groups 
+          // (but skip the very first one which might be system messages)
+          const groupsToRemove = groupIds.slice(1, groupIds.length - MAX_EXECUTION_HISTORY + 2);
+          const groupsToKeep = new Set(groupIds.filter(id => !groupsToRemove.includes(id)));
+          
+          // Filter out logs from removed groups
+          const trimmedLogs = prev.filter(output => groupsToKeep.has(output.groupId));
+          
+          // Add cleanup message + new error outputs
+          return [
+            ...trimmedLogs,
+            {
+              type: 'warn',
+              content: [`Cleared ${groupsToRemove.length} older execution logs to save memory`],
+              timestamp: Date.now(),
+              id: generateId(),
+              groupId: generateId()
+            },
+            errorOutput,
+            failedMessage
+          ];
         }
-      ]);
+        
+        // Otherwise just append the new messages
+        return [...prev, errorOutput, failedMessage];
+      });
       
       // Record execution time even for failures
       const endTime = performance.now();
@@ -352,15 +497,45 @@ export function CodeProvider({ children }: { children: ReactNode }) {
 
   // Toggle functions
   const toggleLineNumbers = useCallback(() => {
-    setShowLineNumbers(prev => !prev);
+    setShowLineNumbers(prev => {
+      const newValue = !prev;
+      // Force save to localStorage with specific key
+      try {
+        localStorage.setItem('js-compiler-showLines', String(newValue));
+        console.log(`Show line numbers toggled to: ${newValue}`);
+      } catch (err) {
+        console.error('Failed to save line numbers setting:', err);
+      }
+      return newValue;
+    });
   }, []);
 
   const toggleAutoRun = useCallback(() => {
-    setAutoRun(prev => !prev);
+    setAutoRun(prev => {
+      const newValue = !prev;
+      // Force save to localStorage with specific key
+      try {
+        localStorage.setItem('js-compiler-autoRun', String(newValue));
+        console.log(`Auto-run toggled to: ${newValue}`);
+      } catch (err) {
+        console.error('Failed to save auto-run setting:', err);
+      }
+      return newValue;
+    });
   }, []);
   
   const toggleAutoScroll = useCallback(() => {
-    setAutoScroll(prev => !prev);
+    setAutoScroll(prev => {
+      const newValue = !prev;
+      // Force save to localStorage with specific key
+      try {
+        localStorage.setItem('js-compiler-autoScroll', String(newValue));
+        console.log(`Auto-scroll toggled to: ${newValue}`);
+      } catch (err) {
+        console.error('Failed to save auto-scroll setting:', err);
+      }
+      return newValue;
+    });
   }, []);
 
   // Memoize the context value to prevent unnecessary re-renders

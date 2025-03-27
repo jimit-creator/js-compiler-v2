@@ -1,8 +1,9 @@
 import { Button } from "@/components/ui/button";
 import ThemeToggle from "./ThemeToggle";
+import { useTheme } from "@/contexts/ThemeContext";
 import { Share1Icon, InfoCircledIcon, GearIcon, EyeClosedIcon, EyeOpenIcon } from "@radix-ui/react-icons";
 import { Code2, GithubIcon, Twitter, Settings } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useState, useEffect, useCallback } from "react";
 import { 
   Tooltip,
   TooltipContent,
@@ -30,31 +31,68 @@ import { Label } from "@/components/ui/label";
 interface HeaderProps {
   onShareClick: () => void;
   onMenuClick?: () => void;
-  showExamples?: boolean;
-  onToggleExamples?: (show: boolean) => void;
+  showLineNumbers?: boolean;
+  toggleLineNumbers?: () => void;
+  autoRun?: boolean;
+  toggleAutoRun?: () => void;
 }
 
 // Memoize the Header to prevent unnecessary re-renders
 const Header = memo(({ 
   onShareClick, 
   onMenuClick, 
-  showExamples = true, 
-  onToggleExamples 
+  showLineNumbers = true,
+  toggleLineNumbers,
+  autoRun = false,
+  toggleAutoRun
 }: HeaderProps) => {
   // Get app version from package.json (default to 1.0.0 if unavailable)
   const appVersion = "1.1.0";
   
-  // Local state for examples visibility if no callback provided
-  const [localShowExamples, setLocalShowExamples] = useState(showExamples);
-  
-  // Handle toggle examples visibility
-  const handleToggleExamples = () => {
-    const newValue = !localShowExamples;
-    setLocalShowExamples(newValue);
-    if (onToggleExamples) {
-      onToggleExamples(newValue);
+  // Local state for settings if no callback provided
+  const [localShowLineNumbers, setLocalShowLineNumbers] = useState(showLineNumbers);
+  const [localAutoRun, setLocalAutoRun] = useState(autoRun);
+
+  // Update local state when props change
+  useEffect(() => {
+    setLocalShowLineNumbers(showLineNumbers);
+  }, [showLineNumbers]);
+
+  useEffect(() => {
+    setLocalAutoRun(autoRun);
+  }, [autoRun]);
+
+  // Handle toggle line numbers - now directly handling the event
+  const handleToggleLineNumbers = useCallback((checked: boolean) => {
+    console.log("Toggle line numbers called with value:", checked);
+    
+    // Always update local state for immediate UI feedback
+    setLocalShowLineNumbers(checked);
+    
+    if (toggleLineNumbers) {
+      // Set a longer timeout to ensure DOM event has finished processing
+      setTimeout(() => {
+        console.log("Calling toggleLineNumbers from context");
+        toggleLineNumbers();
+      }, 50); 
     }
-  };
+  }, [toggleLineNumbers]);
+
+  // Handle toggle auto run - now directly handling the event
+  const handleToggleAutoRun = useCallback((checked: boolean) => {
+    console.log("Toggle auto run called with value:", checked);
+    
+    // Always update local state for immediate UI feedback
+    setLocalAutoRun(checked);
+    
+    if (toggleAutoRun) {
+      // Set a longer timeout to ensure DOM event has finished processing
+      setTimeout(() => {
+        console.log("Calling toggleAutoRun from context");
+        toggleAutoRun();
+      }, 50);
+    }
+  }, [toggleAutoRun]);
 
   return (
     <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm">
@@ -76,7 +114,7 @@ const Header = memo(({
               <TooltipTrigger asChild>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon">
+                    <Button variant="ghost" size="icon" type="button">
                       <InfoCircledIcon className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -128,7 +166,7 @@ const Header = memo(({
               <TooltipTrigger asChild>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon">
+                    <Button variant="ghost" size="icon" type="button">
                       <Settings className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -137,49 +175,72 @@ const Header = memo(({
                     <DropdownMenuSeparator />
                     
                     <DropdownMenuGroup>
-                      {/* Example visibility toggle */}
-                      <DropdownMenuItem className="flex items-center justify-between" onSelect={(e) => {
-                        e.preventDefault();
-                        handleToggleExamples();
-                      }}>
+                      {/* Line Numbers Toggle */}
+                      <div className="px-2 py-1.5 flex items-center justify-between">
                         <div className="flex items-center space-x-2">
-                          {localShowExamples ? 
-                            <EyeOpenIcon className="h-4 w-4" /> : 
-                            <EyeClosedIcon className="h-4 w-4" />
-                          }
-                          <span>Show examples</span>
+                          <GearIcon className="h-4 w-4" />
+                          <span>Show Line Numbers</span>
                         </div>
                         <Switch 
-                          checked={localShowExamples} 
-                          onCheckedChange={handleToggleExamples}
+                          checked={toggleLineNumbers ? showLineNumbers : localShowLineNumbers} 
+                          onCheckedChange={handleToggleLineNumbers}
                         />
-                      </DropdownMenuItem>
+                      </div>
+
+                      {/* Auto-Run Toggle */}
+                      <div className="px-2 py-1.5 flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <GearIcon className="h-4 w-4" />
+                          <span>Auto-Run Code</span>
+                        </div>
+                        <Switch 
+                          checked={toggleAutoRun ? autoRun : localAutoRun} 
+                          onCheckedChange={handleToggleAutoRun}
+                        />
+                      </div>
                       
-                      {/* Appearance sub-menu */}
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger>
-                          <span className="flex items-center space-x-2">
-                            <GearIcon className="h-4 w-4 mr-2" />
-                            <span>Appearance</span>
+                      {/* Theme Toggle */}
+                      <DropdownMenuItem
+                        onClick={() => {
+                          // Get theme context
+                          const { theme, toggleTheme } = useTheme();
+                          // Toggle theme
+                          toggleTheme();
+                        }}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center space-x-2">
+                            <GearIcon className="h-4 w-4" />
+                            <span>Switch Theme</span>
+                          </div>
+                          <span className="text-xs opacity-70">
+                            {useTheme().theme === 'light' ? 'Light' : 'Dark'}
                           </span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuPortal>
-                          <DropdownMenuSubContent>
-                            <div className="p-2">
-                              <Label htmlFor="theme-toggle" className="text-xs">Theme</Label>
-                              <div className="flex items-center justify-between mt-1.5">
-                                <ThemeToggle />
-                              </div>
-                            </div>
-                          </DropdownMenuSubContent>
-                        </DropdownMenuPortal>
-                      </DropdownMenuSub>
+                        </div>
+                      </DropdownMenuItem>
                     </DropdownMenuGroup>
                     
                     <DropdownMenuSeparator />
                     
                     {/* Reset all settings */}
-                    <DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => {
+                      // Reset settings in localStorage
+                      localStorage.setItem('js-compiler-showLines', 'true');
+                      localStorage.setItem('js-compiler-autoRun', 'false');
+                      localStorage.setItem('js-compiler-autoScroll', 'true');
+                      
+                      // Reset local state
+                      setLocalShowLineNumbers(true);
+                      setLocalAutoRun(false);
+                      
+                      // Inform user
+                      alert('All settings have been reset to defaults. The page will reload to apply changes.');
+                      
+                      // Force a page reload to ensure all settings are applied consistently
+                      setTimeout(() => {
+                        window.location.reload();
+                      }, 500);
+                    }}>
                       <span className="text-red-500 text-sm">Reset all settings</span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
@@ -195,9 +256,7 @@ const Header = memo(({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <div>
-                  <ThemeToggle />
-                </div>
+                <ThemeToggle />
               </TooltipTrigger>
               <TooltipContent>
                 <p>Toggle theme</p>
@@ -213,6 +272,7 @@ const Header = memo(({
                   onClick={onShareClick}
                   className="flex items-center space-x-1 bg-emerald-500 hover:bg-emerald-600 text-white"
                   variant="default"
+                  type="button"
                 >
                   <Share1Icon className="h-4 w-4" />
                   <span className="hidden sm:inline">Quick Share</span>
