@@ -199,25 +199,6 @@ const Header = memo(({
                         />
                       </div>
                       
-                      {/* Theme Toggle */}
-                      <DropdownMenuItem
-                        onClick={() => {
-                          // Get theme context
-                          const { theme, toggleTheme } = useTheme();
-                          // Toggle theme
-                          toggleTheme();
-                        }}
-                      >
-                        <div className="flex items-center justify-between w-full">
-                          <div className="flex items-center space-x-2">
-                            <GearIcon className="h-4 w-4" />
-                            <span>Switch Theme</span>
-                          </div>
-                          <span className="text-xs opacity-70">
-                            {useTheme().theme === 'light' ? 'Light' : 'Dark'}
-                          </span>
-                        </div>
-                      </DropdownMenuItem>
                     </DropdownMenuGroup>
                     
                     <DropdownMenuSeparator />
@@ -256,7 +237,9 @@ const Header = memo(({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <ThemeToggle />
+                <span className="inline-block">
+                  <ThemeToggle />
+                </span>
               </TooltipTrigger>
               <TooltipContent>
                 <p>Toggle theme</p>
